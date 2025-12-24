@@ -185,6 +185,15 @@ function handleMouseDown(
 
   const isResizingTableWidth = ctx.isRightEdge;
 
+  let startColumnWidthsPx: number[] | undefined;
+  if (isResizingTableWidth) {
+    startColumnWidthsPx = [];
+    for (let col = 0; col < ctx.map.width; col++) {
+      const colWidthPx = getColumnWidthPx(view, ctx, col, tableWidthPx);
+      startColumnWidthsPx.push(colWidthPx);
+    }
+  }
+
   const startColWidthPx = isResizingTableWidth
     ? 0
     : getColumnWidthPx(view, ctx, ctx.col, tableWidthPx);
@@ -202,6 +211,7 @@ function handleMouseDown(
         startColWidthPx,
         startNextColWidthPx,
         isResizingTableWidth,
+        startColumnWidthsPx,
       } satisfies Dragging,
     }),
   );
@@ -213,20 +223,68 @@ function handleMouseDown(
     if (pluginState?.dragging) {
       const tr = view.state.tr;
       if (pluginState.dragging.isResizingTableWidth) {
+        const widthsByCol = draggedTableWidthColumnPercents(
+          pluginState.dragging,
+          event,
+          cellMinWidth,
+        );
         const newTableWidthPx = draggedTableWidthPx(
           pluginState.dragging,
           event,
           cellMinWidth,
         );
         const nextCtx = getResizeContext(view, pluginState.activeHandle);
-        if (nextCtx) {
+        if (nextCtx && widthsByCol) {
+          const { table, map, tableStart } = nextCtx;
+          const updates = new Map<
+            number,
+            {
+              attrs: CellAttrs;
+              colwidth: number[];
+            }
+          >();
+
+          for (const [colKey, widthPercent] of Object.entries(widthsByCol)) {
+            const col = Number(colKey);
+            if (!Number.isFinite(col)) continue;
+            if (col < 0 || col >= map.width) continue;
+
+            for (let row = 0; row < map.height; row++) {
+              const mapIndex = row * map.width + col;
+              if (row && map.map[mapIndex] == map.map[mapIndex - map.width])
+                continue;
+
+              const pos = map.map[mapIndex];
+              const cell = table.nodeAt(pos);
+              if (!cell) continue;
+
+              const attrs = cell.attrs as CellAttrs;
+              const index = attrs.colspan == 1 ? 0 : col - map.colCount(pos);
+
+              const prev = updates.get(pos);
+              const colwidth = prev
+                ? prev.colwidth
+                : attrs.colwidth
+                  ? attrs.colwidth.slice()
+                  : Array(attrs.colspan).fill(0);
+
+              if (colwidth[index] == widthPercent) continue;
+              colwidth[index] = widthPercent;
+              updates.set(pos, { attrs, colwidth });
+            }
+          }
+
+          for (const [pos, { attrs, colwidth }] of updates) {
+            tr.setNodeMarkup(tableStart + pos, null, { ...attrs, colwidth });
+          }
+
           const $cell = view.state.doc.resolve(pluginState.activeHandle);
           const tablePos = $cell.before(-1);
-          const table = view.state.doc.nodeAt(tablePos);
-          if (table && table.type.spec.tableRole === 'table') {
-            const tableType = table.type;
+          const tableNode = view.state.doc.nodeAt(tablePos);
+          if (tableNode && tableNode.type.spec.tableRole === 'table') {
+            const tableType = tableNode.type;
             tr.setNodeMarkup(tablePos, tableType, {
-              ...table.attrs,
+              ...tableNode.attrs,
               tableWidth: newTableWidthPx,
             });
           }
@@ -296,13 +354,24 @@ function handleMouseDown(
     if (!pluginState) return;
     if (pluginState.dragging) {
       if (pluginState.dragging.isResizingTableWidth) {
+        const widthsByCol = draggedTableWidthColumnPercents(
+          pluginState.dragging,
+          event,
+          cellMinWidth,
+        );
         const newTableWidthPx = draggedTableWidthPx(
           pluginState.dragging,
           event,
           cellMinWidth,
         );
         const nextCtx = getResizeContext(view, pluginState.activeHandle);
-        if (nextCtx) {
+        if (nextCtx && widthsByCol) {
+          displayColumnWidths(
+            view,
+            { table: nextCtx.table, tableStart: nextCtx.tableStart },
+            defaultCellMinWidth,
+            widthsByCol,
+          );
           displayTableWidth(
             view,
             { table: nextCtx.table, tableStart: nextCtx.tableStart },
@@ -329,22 +398,34 @@ function handleMouseDown(
   }
 
   if (isResizingTableWidth) {
+    const initialDragging: Dragging = {
+      startX: event.clientX,
+      tableWidthPx,
+      col: ctx.col,
+      nextCol: ctx.nextCol,
+      startColWidthPx,
+      startNextColWidthPx,
+      isResizingTableWidth: true,
+      startColumnWidthsPx,
+    };
+    const widthsByCol = draggedTableWidthColumnPercents(
+      initialDragging,
+      event,
+      cellMinWidth,
+    );
+    const newTableWidthPx = draggedTableWidthPx(initialDragging, event, cellMinWidth);
+    if (widthsByCol) {
+      displayColumnWidths(
+        view,
+        { table: ctx.table, tableStart: ctx.tableStart },
+        defaultCellMinWidth,
+        widthsByCol,
+      );
+    }
     displayTableWidth(
       view,
       { table: ctx.table, tableStart: ctx.tableStart },
-      draggedTableWidthPx(
-        {
-          startX: event.clientX,
-          tableWidthPx,
-          col: ctx.col,
-          nextCol: ctx.nextCol,
-          startColWidthPx,
-          startNextColWidthPx,
-          isResizingTableWidth: true,
-        },
-        event,
-        cellMinWidth,
-      ),
+      newTableWidthPx,
     );
   } else {
     displayColumnWidths(
@@ -410,9 +491,53 @@ function draggedTableWidthPx(
   event: MouseEvent,
   cellMinWidth: number,
 ): number {
+  if (!dragging.startColumnWidthsPx || dragging.startColumnWidthsPx.length === 0) {
+    const offsetPx = event.clientX - dragging.startX;
+    const minWidthPx = cellMinWidth * 2;
+    return Math.max(minWidthPx, dragging.tableWidthPx + offsetPx);
+  }
+
   const offsetPx = event.clientX - dragging.startX;
-  const minWidthPx = cellMinWidth * 2;
-  return Math.max(minWidthPx, dragging.tableWidthPx + offsetPx);
+  const lastColIndex = dragging.startColumnWidthsPx.length - 1;
+  const otherColsWidthPx = dragging.startColumnWidthsPx
+    .slice(0, lastColIndex)
+    .reduce((sum, w) => sum + w, 0);
+  const minLastColWidthPx = cellMinWidth;
+  const minTableWidthPx = otherColsWidthPx + minLastColWidthPx;
+  const newTableWidthPx = dragging.tableWidthPx + offsetPx;
+  return Math.max(minTableWidthPx, newTableWidthPx);
+}
+
+function draggedTableWidthColumnPercents(
+  dragging: Dragging,
+  event: MouseEvent,
+  cellMinWidth: number,
+): Record<number, number> | null {
+  if (!dragging.startColumnWidthsPx || dragging.startColumnWidthsPx.length === 0) {
+    return null;
+  }
+
+  const newTableWidthPx = draggedTableWidthPx(dragging, event, cellMinWidth);
+  if (newTableWidthPx <= 0) return null;
+
+  const lastColIndex = dragging.startColumnWidthsPx.length - 1;
+  const otherColsWidthPx = dragging.startColumnWidthsPx
+    .slice(0, lastColIndex)
+    .reduce((sum, w) => sum + w, 0);
+  const lastColWidthPx = newTableWidthPx - otherColsWidthPx;
+
+  const result: Record<number, number> = {};
+  for (let col = 0; col < lastColIndex; col++) {
+    const colWidthPx = dragging.startColumnWidthsPx[col];
+    const colPercent =
+      newTableWidthPx > 0 ? round((colWidthPx / newTableWidthPx) * 100, 3) : 0;
+    result[col] = colPercent;
+  }
+  const lastColPercent =
+    newTableWidthPx > 0 ? round((lastColWidthPx / newTableWidthPx) * 100, 3) : 0;
+  result[lastColIndex] = lastColPercent;
+
+  return result;
 }
 
 function updateHandle(view: EditorView, value: number): void {
