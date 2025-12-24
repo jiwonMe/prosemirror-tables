@@ -160,9 +160,29 @@ export function tableNodes(options: TableNodesOptions): TableNodes {
       tableRole: 'table',
       isolating: true,
       group: options.tableGroup,
-      parseDOM: [{ tag: 'table' }],
-      toDOM() {
-        return ['table', ['tbody', 0]];
+      attrs: {
+        tableWidth: { default: null, validate: 'number' },
+      },
+      parseDOM: [
+        {
+          tag: 'table',
+          getAttrs: (dom) => {
+            if (typeof dom === 'string') return {};
+            const widthAttr = dom.getAttribute('data-table-width');
+            const width =
+              widthAttr && /^\d+(\.\d+)?$/.test(widthAttr)
+                ? Number(widthAttr)
+                : null;
+            return width != null ? { tableWidth: width } : {};
+          },
+        },
+      ],
+      toDOM(node) {
+        const attrs: Record<string, string> = {};
+        if (node.attrs.tableWidth != null) {
+          attrs['data-table-width'] = String(node.attrs.tableWidth);
+        }
+        return ['table', attrs, ['tbody', 0]];
       },
     },
     table_row: {

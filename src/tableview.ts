@@ -134,6 +134,11 @@ export function updateColumnsOnResize(
     nextDOM = after as HTMLElement;
   }
 
-  table.style.width = '100%';
+  const tableWidth = node.attrs.tableWidth as number | null | undefined;
+  if (tableWidth != null && tableWidth > 0) {
+    table.style.width = `${tableWidth}px`;
+  } else {
+    table.style.width = '100%';
+  }
   table.style.minWidth = `${displayPercents.length * defaultCellMinWidth}px`;
 }

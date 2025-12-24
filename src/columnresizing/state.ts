@@ -13,6 +13,7 @@ export type Dragging = {
   nextCol: number;
   startColWidthPx: number;
   startNextColWidthPx: number;
+  isResizingTableWidth: boolean;
 };
 
 /**

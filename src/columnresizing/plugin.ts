@@ -5,11 +5,13 @@ import type { EditorView, NodeView } from 'prosemirror-view';
 import { tableNodeTypes } from '../schema';
 import { TableMap } from '../tablemap';
 import { TableView } from '../tableview';
+import type { CellAttrs } from '../util';
 import { columnResizingPluginKey, type Dragging, ResizeState } from './state';
 import { handleDecorations } from './decorations';
 import {
   clamp,
   displayColumnWidths,
+  displayTableWidth,
   domCellAround,
   edgeCell,
   findTableDom,
@@ -17,7 +19,6 @@ import {
   getResizeContext,
   getTableWidthPx,
   round,
-  updateColumnWidths,
 } from './resize-utils';
 
 /**
@@ -182,13 +183,14 @@ function handleMouseDown(
   const tableWidthPx = getTableWidthPx(tableDom);
   if (tableWidthPx <= 0) return false;
 
-  const startColWidthPx = getColumnWidthPx(view, ctx, ctx.col, tableWidthPx);
-  const startNextColWidthPx = getColumnWidthPx(
-    view,
-    ctx,
-    ctx.nextCol,
-    tableWidthPx,
-  );
+  const isResizingTableWidth = ctx.isRightEdge;
+
+  const startColWidthPx = isResizingTableWidth
+    ? 0
+    : getColumnWidthPx(view, ctx, ctx.col, tableWidthPx);
+  const startNextColWidthPx = isResizingTableWidth
+    ? 0
+    : getColumnWidthPx(view, ctx, ctx.nextCol, tableWidthPx);
 
   view.dispatch(
     view.state.tr.setMeta(columnResizingPluginKey, {
@@ -199,6 +201,7 @@ function handleMouseDown(
         nextCol: ctx.nextCol,
         startColWidthPx,
         startNextColWidthPx,
+        isResizingTableWidth,
       } satisfies Dragging,
     }),
   );
@@ -208,26 +211,82 @@ function handleMouseDown(
     win.removeEventListener('mousemove', move);
     const pluginState = columnResizingPluginKey.getState(view.state);
     if (pluginState?.dragging) {
-      const widthsByCol = draggedColumnPercents(
-        pluginState.dragging,
-        event,
-        cellMinWidth,
-      );
-      const nextCtx = getResizeContext(view, pluginState.activeHandle);
-      if (nextCtx) {
-        updateColumnWidths(
-          view,
-          {
-            table: nextCtx.table,
-            map: nextCtx.map,
-            tableStart: nextCtx.tableStart,
-          },
-          widthsByCol,
+      const tr = view.state.tr;
+      if (pluginState.dragging.isResizingTableWidth) {
+        const newTableWidthPx = draggedTableWidthPx(
+          pluginState.dragging,
+          event,
+          cellMinWidth,
         );
+        const nextCtx = getResizeContext(view, pluginState.activeHandle);
+        if (nextCtx) {
+          const $cell = view.state.doc.resolve(pluginState.activeHandle);
+          const tablePos = $cell.before(-1);
+          const table = view.state.doc.nodeAt(tablePos);
+          if (table && table.type.spec.tableRole === 'table') {
+            const tableType = table.type;
+            tr.setNodeMarkup(tablePos, tableType, {
+              ...table.attrs,
+              tableWidth: newTableWidthPx,
+            });
+          }
+        }
+      } else {
+        const widthsByCol = draggedColumnPercents(
+          pluginState.dragging,
+          event,
+          cellMinWidth,
+        );
+        const nextCtx = getResizeContext(view, pluginState.activeHandle);
+        if (nextCtx) {
+          const { table, map, tableStart } = nextCtx;
+          const updates = new Map<
+            number,
+            {
+              attrs: CellAttrs;
+              colwidth: number[];
+            }
+          >();
+
+          for (const [colKey, widthPercent] of Object.entries(widthsByCol)) {
+            const col = Number(colKey);
+            if (!Number.isFinite(col)) continue;
+            if (col < 0 || col >= map.width) continue;
+
+            for (let row = 0; row < map.height; row++) {
+              const mapIndex = row * map.width + col;
+              if (row && map.map[mapIndex] == map.map[mapIndex - map.width])
+                continue;
+
+              const pos = map.map[mapIndex];
+              const cell = table.nodeAt(pos);
+              if (!cell) continue;
+
+              const attrs = cell.attrs as CellAttrs;
+              const index = attrs.colspan == 1 ? 0 : col - map.colCount(pos);
+
+              const prev = updates.get(pos);
+              const colwidth = prev
+                ? prev.colwidth
+                : attrs.colwidth
+                  ? attrs.colwidth.slice()
+                  : Array(attrs.colspan).fill(0);
+
+              if (colwidth[index] == widthPercent) continue;
+              colwidth[index] = widthPercent;
+              updates.set(pos, { attrs, colwidth });
+            }
+          }
+
+          for (const [pos, { attrs, colwidth }] of updates) {
+            tr.setNodeMarkup(tableStart + pos, null, { ...attrs, colwidth });
+          }
+        }
       }
-      view.dispatch(
-        view.state.tr.setMeta(columnResizingPluginKey, { setDragging: null }),
-      );
+      tr.setMeta(columnResizingPluginKey, { setDragging: null });
+      if (tr.docChanged || tr.getMeta(columnResizingPluginKey)) {
+        view.dispatch(tr);
+      }
     }
   }
 
@@ -236,40 +295,77 @@ function handleMouseDown(
     const pluginState = columnResizingPluginKey.getState(view.state);
     if (!pluginState) return;
     if (pluginState.dragging) {
-      const widthsByCol = draggedColumnPercents(
-        pluginState.dragging,
-        event,
-        cellMinWidth,
-      );
-      const nextCtx = getResizeContext(view, pluginState.activeHandle);
-      if (nextCtx) {
-        displayColumnWidths(
-          view,
-          { table: nextCtx.table, tableStart: nextCtx.tableStart },
-          defaultCellMinWidth,
-          widthsByCol,
+      if (pluginState.dragging.isResizingTableWidth) {
+        const newTableWidthPx = draggedTableWidthPx(
+          pluginState.dragging,
+          event,
+          cellMinWidth,
         );
+        const nextCtx = getResizeContext(view, pluginState.activeHandle);
+        if (nextCtx) {
+          displayTableWidth(
+            view,
+            { table: nextCtx.table, tableStart: nextCtx.tableStart },
+            newTableWidthPx,
+          );
+        }
+      } else {
+        const widthsByCol = draggedColumnPercents(
+          pluginState.dragging,
+          event,
+          cellMinWidth,
+        );
+        const nextCtx = getResizeContext(view, pluginState.activeHandle);
+        if (nextCtx) {
+          displayColumnWidths(
+            view,
+            { table: nextCtx.table, tableStart: nextCtx.tableStart },
+            defaultCellMinWidth,
+            widthsByCol,
+          );
+        }
       }
     }
   }
 
-  displayColumnWidths(
-    view,
-    { table: ctx.table, tableStart: ctx.tableStart },
-    defaultCellMinWidth,
-    draggedColumnPercents(
-      {
-        startX: event.clientX,
-        tableWidthPx,
-        col: ctx.col,
-        nextCol: ctx.nextCol,
-        startColWidthPx,
-        startNextColWidthPx,
-      },
-      event,
-      cellMinWidth,
-    ),
-  );
+  if (isResizingTableWidth) {
+    displayTableWidth(
+      view,
+      { table: ctx.table, tableStart: ctx.tableStart },
+      draggedTableWidthPx(
+        {
+          startX: event.clientX,
+          tableWidthPx,
+          col: ctx.col,
+          nextCol: ctx.nextCol,
+          startColWidthPx,
+          startNextColWidthPx,
+          isResizingTableWidth: true,
+        },
+        event,
+        cellMinWidth,
+      ),
+    );
+  } else {
+    displayColumnWidths(
+      view,
+      { table: ctx.table, tableStart: ctx.tableStart },
+      defaultCellMinWidth,
+      draggedColumnPercents(
+        {
+          startX: event.clientX,
+          tableWidthPx,
+          col: ctx.col,
+          nextCol: ctx.nextCol,
+          startColWidthPx,
+          startNextColWidthPx,
+          isResizingTableWidth: false,
+        },
+        event,
+        cellMinWidth,
+      ),
+    );
+  }
 
   win.addEventListener('mouseup', finish);
   win.addEventListener('mousemove', move);
@@ -307,6 +403,16 @@ function draggedColumnPercents(
     [dragging.col]: colPercent,
     [dragging.nextCol]: nextColPercent,
   };
+}
+
+function draggedTableWidthPx(
+  dragging: Dragging,
+  event: MouseEvent,
+  cellMinWidth: number,
+): number {
+  const offsetPx = event.clientX - dragging.startX;
+  const minWidthPx = cellMinWidth * 2;
+  return Math.max(minWidthPx, dragging.tableWidthPx + offsetPx);
 }
 
 function updateHandle(view: EditorView, value: number): void {

@@ -115,6 +115,7 @@ export type ResizeContext = {
   row: number;
   col: number;
   nextCol: number;
+  isRightEdge: boolean;
 };
 
 export function getResizeContext(
@@ -133,6 +134,7 @@ export function getResizeContext(
   const col =
     map.colCount($cell.pos - tableStart) + (cell.attrs as CellAttrs).colspan - 1;
 
+  const isRightEdge = col >= map.width - 1;
   if (map.width < 2) return null;
   const nextCol = col < map.width - 1 ? col + 1 : col - 1;
   if (nextCol < 0 || nextCol >= map.width) return null;
@@ -144,6 +146,7 @@ export function getResizeContext(
     row: rect.top,
     col,
     nextCol,
+    isRightEdge,
   };
 }
 
@@ -185,6 +188,31 @@ export function displayColumnWidths(
     defaultCellMinWidth,
     widthsByCol,
   );
+}
+
+export function displayTableWidth(
+  view: EditorView,
+  ctx: Pick<ResizeContext, 'table' | 'tableStart'>,
+  tableWidthPx: number,
+): void {
+  const tableDom = findTableDom(view, ctx.tableStart);
+  if (!tableDom) return;
+  tableDom.style.width = `${tableWidthPx}px`;
+}
+
+export function updateTableWidth(
+  view: EditorView,
+  tableStart: number,
+  tableWidthPx: number,
+): void {
+  const tr = view.state.tr;
+  const table = view.state.doc.nodeAt(tableStart);
+  if (!table) return;
+  tr.setNodeMarkup(tableStart, null, {
+    ...table.attrs,
+    tableWidth: tableWidthPx,
+  });
+  if (tr.docChanged) view.dispatch(tr);
 }
 
 function zeroes(n: number): 0[] {
