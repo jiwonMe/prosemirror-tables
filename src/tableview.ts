@@ -51,38 +51,80 @@ export class TableView implements NodeView {
 /**
  * @public
  */
+export type ColumnWidthOverrides = Record<number, number>;
+
 export function updateColumnsOnResize(
   node: Node,
   colgroup: HTMLTableColElement,
   table: HTMLTableElement,
   defaultCellMinWidth: number,
-  overrideCol?: number,
+  overrideColOrOverrides?: number | ColumnWidthOverrides,
   overrideValue?: number,
 ): void {
-  let totalWidth = 0;
-  let fixedWidth = true;
-  let nextDOM = colgroup.firstChild as HTMLElement;
+  const overrideCol =
+    typeof overrideColOrOverrides === 'number'
+      ? overrideColOrOverrides
+      : undefined;
+  const overrides =
+    typeof overrideColOrOverrides === 'object' && overrideColOrOverrides
+      ? overrideColOrOverrides
+      : undefined;
+
   const row = node.firstChild;
   if (!row) return;
 
-  for (let i = 0, col = 0; i < row.childCount; i++) {
+  const rawPercents: number[] = [];
+  for (let i = 0; i < row.childCount; i++) {
     const { colspan, colwidth } = row.child(i).attrs as CellAttrs;
-    for (let j = 0; j < colspan; j++, col++) {
-      const hasWidth =
-        overrideCol == col ? overrideValue : colwidth && colwidth[j];
-      const cssWidth = hasWidth ? hasWidth + 'px' : '';
-      totalWidth += hasWidth || defaultCellMinWidth;
-      if (!hasWidth) fixedWidth = false;
-      if (!nextDOM) {
-        const col = document.createElement('col');
-        col.style.width = cssWidth;
-        colgroup.appendChild(col);
-      } else {
-        if (nextDOM.style.width != cssWidth) {
-          nextDOM.style.width = cssWidth;
-        }
-        nextDOM = nextDOM.nextSibling as HTMLElement;
+    for (let j = 0; j < colspan; j++) {
+      const col = rawPercents.length;
+      const widthPercent =
+        overrides?.[col] ??
+        (overrideCol == col ? overrideValue : colwidth && colwidth[j]);
+      rawPercents.push(typeof widthPercent === 'number' ? widthPercent : 0);
+    }
+  }
+
+  const specified = rawPercents.filter((w) => w > 0);
+  const specifiedSum = specified.reduce((sum, w) => sum + w, 0);
+  const specifiedCount = specified.length;
+
+  const displayPercents =
+    specifiedSum > 0 && specifiedCount > 0
+      ? (() => {
+          const base = specifiedSum / specifiedCount;
+          const weights = rawPercents.map((w) => (w > 0 ? w : base));
+          const total = weights.reduce((sum, w) => sum + w, 0);
+          if (total <= 0) return rawPercents.map(() => 0);
+
+          const result: number[] = [];
+          let acc = 0;
+          for (let i = 0; i < weights.length; i++) {
+            if (i == weights.length - 1) {
+              result.push(Math.max(0, 100 - acc));
+            } else {
+              const next = (weights[i] / total) * 100;
+              const rounded = Math.round(next * 1000) / 1000;
+              acc += rounded;
+              result.push(rounded);
+            }
+          }
+          return result;
+        })()
+      : rawPercents;
+
+  let nextDOM = colgroup.firstChild as HTMLElement;
+  for (let col = 0; col < displayPercents.length; col++) {
+    const cssWidth = displayPercents[col] ? `${displayPercents[col]}%` : '';
+    if (!nextDOM) {
+      const colDom = document.createElement('col');
+      colDom.style.width = cssWidth;
+      colgroup.appendChild(colDom);
+    } else {
+      if (nextDOM.style.width != cssWidth) {
+        nextDOM.style.width = cssWidth;
       }
+      nextDOM = nextDOM.nextSibling as HTMLElement;
     }
   }
 
@@ -92,11 +134,6 @@ export function updateColumnsOnResize(
     nextDOM = after as HTMLElement;
   }
 
-  if (fixedWidth) {
-    table.style.width = totalWidth + 'px';
-    table.style.minWidth = '';
-  } else {
-    table.style.width = '';
-    table.style.minWidth = totalWidth + 'px';
-  }
+  table.style.width = '100%';
+  table.style.minWidth = `${displayPercents.length * defaultCellMinWidth}px`;
 }

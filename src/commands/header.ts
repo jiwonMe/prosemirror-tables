@@ -1,5 +1,5 @@
 import type { NodeType } from 'prosemirror-model';
-import type { Command, Transaction, EditorState } from 'prosemirror-state';
+import type { Command } from 'prosemirror-state';
 
 import { tableNodeTypes } from '../schema';
 import { isInTable } from '../util';

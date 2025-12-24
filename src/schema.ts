@@ -18,7 +18,7 @@ function getCellAttrs(dom: HTMLElement | string, extraAttrs: Attrs): Attrs {
 
   const widthAttr = dom.getAttribute('data-colwidth');
   const widths =
-    widthAttr && /^\d+(,\d+)*$/.test(widthAttr)
+    widthAttr && /^\d+(\.\d+)?(,\d+(\.\d+)?)*$/.test(widthAttr)
       ? widthAttr.split(',').map((s) => Number(s))
       : null;
   const colspan = Number(dom.getAttribute('colspan') || 1);
