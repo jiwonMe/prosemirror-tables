@@ -1,6 +1,6 @@
-# ProseMirror table module
+# ProseMirror Better Table module
 
-This module defines a schema extension to support tables with
+This is an improved version of the ProseMirror table module. it defines a schema extension to support tables with
 rowspan/colspan support, a custom selection class for cell selections
 in such a table, a plugin to manage such selections and enforce
 invariants on such tables, and a number of commands to work with
@@ -10,9 +10,11 @@ The `demo` directory contains a `demo.ts` and `index.html`, which
 can be built with `pnpm run build_demo` to show a simple demo of how the
 module can be used.
 
-## [Live Demo](https://prosemirror-tables.netlify.app/)
+## Installation
 
-## Documentation
+```bash
+pnpm add prosemirror-better-tables
+```
 
 The module's main file exports everything you need to work with it.
 The first thing you'll probably want to do is create a table-enabled

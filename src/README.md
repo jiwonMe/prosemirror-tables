@@ -1,6 +1,6 @@
-# ProseMirror table module
+# ProseMirror Better Table module
 
-This module defines a schema extension to support tables with
+This is an improved version of the ProseMirror table module. it defines a schema extension to support tables with
 rowspan/colspan support, a custom selection class for cell selections
 in such a table, a plugin to manage such selections and enforce
 invariants on such tables, and a number of commands to work with

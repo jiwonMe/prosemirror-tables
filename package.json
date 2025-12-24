@@ -1,9 +1,9 @@
 {
-  "name": "prosemirror-tables",
+  "name": "prosemirror-better-tables",
   "type": "module",
   "version": "1.8.5",
   "packageManager": "pnpm@10.26.2",
-  "description": "ProseMirror's rowspan/colspan tables component",
+  "description": "An improved version of ProseMirror's rowspan/colspan tables component",
   "license": "MIT",
   "repository": {
     "type": "git",
